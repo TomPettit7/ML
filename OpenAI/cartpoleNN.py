@@ -1,124 +1,110 @@
 import gym
-import random
-import numpy as np 
-import tflearn 
-from tflearn.layers.core import input_data, dropout, fully_connected
-from tflearn.layers.estimator import regression
-from statistics import mean, median 
-from collections import Counter
+import numpy as np
+from tensorflow import keras
+import tensorflow as tf
 
 
-env = gym.make('CartPole-v0')
-env.reset()
-required_score = 50
-prev_obs = []
-output = [0,0]
+def create_data(env):
 
-def neural_network_model(input_size):
-    network = input_data(shape=[None, input_size, 1], name='input')
-
-    network = fully_connected(network, 128, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 256, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 512, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 256, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 128, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 2, activation = 'softmax')
-    network = regression(network, optimizer='adam', learning_rate=1e-3, loss='categorical_crossentropy', name='targets')
-
-    model = tflearn.DNN(network, tensorboard_dir='log')
-
-    return model 
-
-def create_data():
     scores = []
-    #observations, moves
-    training_data = []
-    accepted_scores = []
+    score_requirement = 50
+    X_data = []
+    y_data = []
 
-    for _ in range(10000):
-        global prev_obs
+    for i in range(10000):
+        observation = env.reset()
         score = 0
-        #previous observations, action fulfilled
-        game_memory = []
-        prev_obs = []
+        move_memory = []
+        obs_memory = []
 
-        for _ in range(500):
-            action = random.randrange(0,2)
-            observation, reward, done, info = env.step(action)
+        for i in range(500):
+            action = np.random.randint(0,2)
+            one_hot = np.zeros(2)
 
-            if len(prev_obs) > 0:
-                game_memory.append([prev_obs, action])
-        
-            prev_obs = observation
-            score += reward 
+            one_hot[action] = 1
 
-        if score >= required_score:
-            accepted_scores.append(score)
-            for data in game_memory:
-                global output
-                if data[1] == 1:
-                    output = [0,1]
-                if data[1] == 0:
-                    output = [1,0]
-                
-                training_data.append([data[0], output])
-        env.reset()
-        scores.append(score)
-    print('Average Score: ', (sum(scores)/len(scores)))
-    return training_data
+            move_memory.append(one_hot)
+            obs_memory.append(observation)
 
-def train_model(training_data, model=False):
-    global prev_obs
-    global output
-    #X: prev_obs
-    #Y: output
-    X = np.array([i[0] for i in training_data]).reshape(-1,len(training_data[0][0]),1)
+            observation, reward, done, _ = env.step(action)
+            score += reward
 
-    Y = [i[1] for i in training_data]
+            if done:
+                break
 
-    if not model:
-        model = neural_network_model(input_size=len(X[0]))
-    model.fit({'input': X}, {'targets': Y}, n_epoch = 3, snapshot_step=500, show_metric=True, run_id='openai_learning')
+        if score >= score_requirement:
+            scores.append(score)
+
+            X_data += obs_memory
+            y_data += move_memory
+
+    print('Mean Score of Training Data: ' + str(np.mean(scores)))
+    print('Number of Training Data Points: ' + str(len(scores)))
+
+    X_data = np.array(X_data)
+    y_data = np.array(y_data)
+
+    return X_data, y_data
+
+
+def train_NN_model(X_data, y_data):
+
+    model = keras.models.Sequential()
+    model.add(keras.layers.Dense(128, input_shape=(4,), activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(1024, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(512, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+    model.add(keras.layers.Dropout(0.3))
+
+    model.add(keras.layers.Dense(2, activation='softmax', kernel_regularizer=tf.keras.regularizers.l2(0.0001)))
+
+    model.compile(optimizer=tf.train.AdamOptimizer(learning_rate=0.00001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+    model.fit(X_data, y_data, epochs=5)
+
     return model
 
-training_data = create_data()
-model = train_model(training_data)
 
-scores = []
-choices =[]
-for iter in range(10):
-    score = 0
-    game_memory = []
-    prev_obs = []
-    env.reset()
-    for _ in range(500):
-        env.render()
+def predict():
+    scores = []
+    env = gym.make('CartPole-v0')
+    X_data, y_data = create_data(env)
+    sim_steps = 500
 
-        if len(prev_obs)==0:
-            action = random.randrange(0,2)
-        else:
-            action = np.argmax(model.predict(prev_obs.reshape(-1, len(prev_obs),1))[0])
+    model = train_NN_model(X_data, y_data)
 
-        choices.append(action)
+    for i in range(100):
+        observation = env.reset()
+        score = 0
 
-        new_observation, reward, done, info = env.step(action)
-        prev_obs = new_observation
-        game_memory.append([prev_obs, action])
-        score += reward
-        if done:
-            break
+        for step in range(sim_steps):
+            action = np.argmax(model.predict(observation.reshape(1,4)))
 
-    scores.append(score)
+            observation, reward, done, _ = env.step(action)
 
-print('New Average Score: ', sum(scores)/len(scores))
-print('Choice: Right: {}, Choice: Left: {}'.format(choices.count(1)/len(choices), choices.count(0)/len(choices)))
+            score += reward
+
+            if done:
+                break
+
+        scores.append(score)
+
+    print('Average Score After Testing: ' + str(np.mean(scores)))
+
+predict()
+
+#Average score of 200 over 100 consecutive trials
+
+#Therefore SOLVED
